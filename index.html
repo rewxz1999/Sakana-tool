@@ -1308,6 +1308,14 @@ function drawCover(ctx, img, dx, dy, dw, dh, bias) {
   var iw = img.naturalWidth || img.width;
   var ih = img.naturalHeight || img.height;
   if (!iw || !ih) return false;
+  // v0.2.17：源图比格子小时**不放大**（原始像素居中，宁可留白）——
+  // Bangumi 立绘尺寸差异极大：常见 800x2767，但也有不少角色最大档只有 250x300，
+  // cover 拉到格子尺寸等于放大 1.8 倍，插值再好也是糊的。
+  var containScale = Math.min(dw / iw, dh / ih);
+  if (containScale > 1) {
+    ctx.drawImage(img, dx + (dw - iw) / 2, dy + (dh - ih) / 2, iw, ih);
+    return true;
+  }
   var scale = Math.max(dw / iw, dh / ih);
   var sw = iw * scale, sh = ih * scale;
   var sx = (sw - dw) / 2;
