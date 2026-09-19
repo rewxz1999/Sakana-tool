@@ -1,0 +1,1631 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>最XX的角色 9宫格</title>
+<!--
+  最XX的角色 9宫格 —— 单文件工具（无构建步骤、无 CDN、无 npm 依赖）
+  双击本文件即可在浏览器里使用。
+
+  数据来源：Bangumi 公开接口（bgm.tv）。角色立绘同样来自 Bangumi 的角色数据。
+
+  本文件内的关键取舍都写在中注释里，主要有三处需要留意的“坑”：
+   1) api.bgm.tv/v0 的浏览器可用性问题（Origin 头会导致 502，且响应无 CORS 头）
+   2) lain.bgm.tv 的图片不带 CORS 头，直接画进 canvas 会导致画布被“污染”而无法导出 PNG，
+      改用 api.bgm.tv 同路径可拿到 Access-Control-Allow-Origin: *，这才让“导出含立绘的 PNG”成立
+   3) 浏览器无法自定义 User-Agent（属于禁止修改的请求头），因此只能依赖浏览器自身 UA
+  详见同目录 README.md。
+-->
+<style>
+  /* ---------- 基础样式：浅色、圆角、轻阴影，不堆特效 ---------- */
+  :root {
+    --bg: #f5f6fa;
+    --panel: #ffffff;
+    --line: #e6e8f0;
+    --line-strong: #d5d9e6;
+    --text: #23262e;
+    --text-dim: #6b7280;
+    --text-faint: #9aa1b1;
+    --accent: #5b6ee1;
+    --accent-dark: #4756c4;
+    --accent-soft: #eef0fe;
+    --danger: #d9534f;
+    --danger-soft: #fdeceb;
+    --ok: #2f9e6e;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 1px 2px rgba(24, 30, 55, .05), 0 6px 18px rgba(24, 30, 55, .06);
+    --shadow-sm: 0 1px 2px rgba(24, 30, 55, .06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+          "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 浏览器无法通过 fetch 设置 User-Agent（禁止修改的请求头），
+     因此工具完全依赖浏览器自身 UA。这一点在 README 里有说明。 */
+
+  header.top {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 16px 22px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    flex-wrap: wrap;
+  }
+  header.top h1 { margin: 0; font-size: 19px; letter-spacing: .5px; }
+  header.top .sub { color: var(--text-dim); font-size: 12.5px; margin-top: 2px; }
+  header.top .src { color: var(--text-faint); font-size: 12px; }
+
+  .wrap {
+    max-width: 1560px; margin: 0 auto; padding: 18px 22px 60px;
+    display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 18px;
+    align-items: start;
+  }
+  @media (max-width: 1180px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px;
+  }
+  .card + .card { margin-top: 16px; }
+  .card > h2 {
+    margin: 0 0 12px; font-size: 14px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card > h2 .hint { font-weight: 400; color: var(--text-faint); font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row + .row { margin-top: 10px; }
+  .grow { flex: 1; min-width: 0; }
+  .sep { width: 1px; height: 22px; background: var(--line); }
+
+  /* ---------- 控件 ---------- */
+  input[type=text], select, textarea {
+    font: inherit; color: inherit; background: #fff;
+    border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+    padding: 7px 10px; outline: none; transition: border-color .12s, box-shadow .12s;
+    max-width: 100%;
+  }
+  input[type=text]:focus, select:focus, textarea:focus {
+    border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91, 110, 225, .14);
+  }
+  textarea { width: 100%; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  button {
+    font: inherit; cursor: pointer; background: #fff; color: var(--text);
+    border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+    padding: 7px 12px; transition: background .12s, border-color .12s, color .12s;
+    white-space: nowrap;
+  }
+  button:hover:not(:disabled) { background: #f7f8fc; border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+  button.ghost { border-color: transparent; background: transparent; color: var(--text-dim); }
+  button.ghost:hover:not(:disabled) { background: #f0f1f7; border-color: transparent; color: var(--text); }
+  button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-dark); font-weight: 600; }
+  button.tiny { padding: 3px 8px; font-size: 12px; }
+  .count { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12.5px; }
+
+  /* ---------- 九宫格 ---------- */
+  .grid-box { overflow-x: auto; padding-bottom: 4px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(var(--cols, 3), minmax(96px, 1fr));
+    gap: 10px;
+    /* 让格子宽度跟随列数：3 列时约 230px，4 列时自动变窄 */
+    max-width: calc(var(--cols, 3) * 232px);
+    margin: 0 auto;
+  }
+  .cell {
+    position: relative;
+    aspect-ratio: 230 / 276;   /* 与导出图的单格比例一致，做到“所见即所得” */
+    background: #fff; border: 1px solid var(--line);
+    border-radius: 10px; box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column; padding: 6px;
+    cursor: pointer; transition: border-color .12s, box-shadow .12s, transform .12s;
+    overflow: hidden; user-select: none;
+  }
+  .cell:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(91, 110, 225, .16); }
+  .cell.target { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91, 110, 225, .28); }
+  .cell.drop-hover { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(47, 158, 110, .3); }
+  .cell.swap-src { border-color: #e0a03a; box-shadow: 0 0 0 2px rgba(224, 160, 58, .32); }
+  .cell.dragging { opacity: .45; }
+
+  .cell .label {
+    flex: 0 0 auto; align-self: flex-start; max-width: 100%;
+    background: var(--accent-soft); color: var(--accent-dark);
+    border-radius: 6px; padding: 1px 7px; font-size: 11.5px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    cursor: text; line-height: 1.5;
+  }
+  .cell .label.empty { background: #f2f3f7; color: var(--text-faint); font-weight: 400; font-style: italic; }
+  .cell .label-input {
+    flex: 0 0 auto; align-self: flex-start; width: 100%;
+    font-size: 11.5px; font-weight: 600; padding: 1px 6px;
+    border-radius: 6px; border: 1px solid var(--accent);
+  }
+  .cell .pic {
+    flex: 1 1 auto; margin-top: 5px; min-height: 0;
+    border-radius: 7px; background: #f3f4f8;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+    position: relative;
+  }
+  .cell .pic img {
+    width: 100%; height: 100%; object-fit: cover;
+    /* 与 canvas 导出的裁切基准保持一致（顶部偏上 20%），人脸不容易被裁掉 */
+    object-position: center 20%;
+    display: block;
+  }
+  .cell .pic .ph { color: var(--text-faint); font-size: 11px; padding: 4px; text-align: center; }
+  .cell .nm {
+    flex: 0 0 auto; text-align: center; padding-top: 4px;
+    font-size: 12px; line-height: 1.35; min-height: 20px;
+  }
+  .cell .nm .n1 { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cell .nm .n2 { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cell .idx {
+    position: absolute; right: 5px; bottom: 4px; font-size: 9.5px;
+    color: #c3c8d6; font-variant-numeric: tabular-nums; pointer-events: none;
+  }
+  .cell .badge-taint {
+    position: absolute; left: 5px; bottom: 4px; font-size: 9.5px;
+    color: #b06a00; background: #fff5e0; border-radius: 4px; padding: 0 4px; pointer-events: none;
+  }
+
+  /* ---------- 侧栏：角色选择器 ---------- */
+  aside .target-bar {
+    background: var(--accent-soft); border-radius: var(--radius-sm);
+    padding: 7px 10px; font-size: 12.5px; color: var(--accent-dark); margin-bottom: 12px;
+  }
+  aside .target-bar b { font-weight: 600; }
+  .list { max-height: 268px; overflow-y: auto; margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+  .list:empty::after { content: "（暂无内容）"; display: block; padding: 12px; color: var(--text-faint); font-size: 12px; }
+  .item {
+    display: flex; gap: 9px; align-items: center; padding: 7px 9px;
+    border-bottom: 1px solid #f1f2f7; cursor: pointer; background: #fff;
+  }
+  .item:last-child { border-bottom: none; }
+  .item:hover { background: #f7f8fd; }
+  .item.sel { background: var(--accent-soft); }
+  .item img {
+    width: 34px; height: 34px; border-radius: 5px; object-fit: cover; object-position: center 20%;
+    background: #f0f1f6; flex: 0 0 auto;
+  }
+  .item .t { min-width: 0; flex: 1; }
+  .item .t .l1 { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .t .l2 { font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chars {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 7px; max-height: 330px; overflow-y: auto; margin-top: 10px;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px;
+  }
+  .chars:empty::after { content: "（先在上面选一部作品，这里会列出它的登场角色）"; grid-column: 1 / -1; color: var(--text-faint); font-size: 12px; padding: 6px; }
+  .ch { cursor: pointer; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #fff; }
+  .ch:hover { border-color: var(--accent); }
+  .ch img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; object-position: center 20%; display: block; background: #f3f4f8; }
+  .ch .cn { font-size: 10.5px; text-align: center; padding: 2px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch .noimg { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 10px; background: #f3f4f8; }
+
+  /* ---------- 提示 / 状态 ---------- */
+  .note {
+    font-size: 12px; color: var(--text-dim); background: #f7f8fc;
+    border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 8px 10px; margin-top: 10px; line-height: 1.65;
+  }
+  .note.warn { border-left-color: #e0a03a; background: #fffaf1; }
+  .note.err { border-left-color: var(--danger); background: var(--danger-soft); }
+  .note code {
+    background: #eceefa; padding: 1px 5px; border-radius: 4px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; word-break: break-all;
+  }
+  .status { font-size: 12.5px; color: var(--text-dim); min-height: 20px; margin-top: 8px; }
+  .status.err { color: var(--danger); }
+  .status.ok { color: var(--ok); }
+  details.paste { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+  details.paste > summary { cursor: pointer; font-size: 13px; color: var(--accent-dark); font-weight: 600; }
+  details.paste[open] > summary { margin-bottom: 8px; }
+  .muted { color: var(--text-faint); font-size: 12px; }
+  .kbd { background: #eef0f6; border-radius: 4px; padding: 0 5px; font-size: 11.5px; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(20px);
+    background: #23262e; color: #fff; padding: 9px 16px; border-radius: 8px;
+    font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s;
+    z-index: 99; max-width: 78vw; text-align: center;
+  }
+  #toast.show { opacity: .95; transform: translateX(-50%) translateY(0); }
+  #toast.err { background: #a83b38; }
+
+  .field-err { border-color: var(--danger) !important; box-shadow: 0 0 0 3px rgba(217, 83, 79, .16) !important; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid #c9cee0; border-top-color: var(--accent); border-radius: 50%; animation: sp .7s linear infinite; vertical-align: -2px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div>
+    <h1>最XX的角色 9宫格</h1>
+    <div class="sub">搜索作品 → 选择角色 → 填进格子 → 导出图片</div>
+  </div>
+  <div class="src">数据来源：Bangumi（bgm.tv）公开接口 · 纯本地单文件，不收集任何数据</div>
+</header>
+
+<div class="wrap">
+
+  <!-- ================= 左：网格 + 导出 ================= -->
+  <main>
+    <section class="card">
+      <h2>格子布局
+        <span class="hint">列 3–4 · 行 3–10 · 最多 40 格</span>
+      </h2>
+      <div class="row">
+        <span class="muted">列数</span>
+        <button class="tiny" id="colMinus" title="减少一列">−</button>
+        <span class="count" id="colNum">3</span>
+        <button class="tiny" id="colPlus" title="增加一列">＋</button>
+        <div class="sep"></div>
+        <span class="muted">行数</span>
+        <button class="tiny" id="rowMinus" title="减少一行">−</button>
+        <span class="count" id="rowNum">3</span>
+        <button class="tiny" id="rowPlus" title="增加一行">＋</button>
+        <div class="sep"></div>
+        <span class="count" id="cellCount">共 9 格</span>
+      </div>
+      <div class="row">
+        <button id="swapMode" title="开启后：依次点击两个格子即可交换它们的角色">点击交换模式</button>
+        <button id="fillDefaults" title="把还没写标签的格子按默认标签顺序补上">补齐默认标签</button>
+        <button id="clearAll" title="清空所有格子里的角色（保留标签）">清空所有角色</button>
+      </div>
+      <div class="note" id="labelNote" style="display:none"></div>
+      <div class="grid-box" style="margin-top:12px">
+        <div class="grid" id="grid"></div>
+      </div>
+      <div class="note">
+        操作：<b>点格子</b> 在右侧选角色 · <b>点格子左上角的标签文字</b> 可直接改写标签 ·
+        <b>拖动格子</b> 到另一个格子可交换两者的角色（标签不动）· 开启「点击交换模式」后点两格也能交换。
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>导出图片 <span class="hint">浏览器端 canvas 合成 PNG</span></h2>
+      <div class="row">
+        <span class="muted" style="flex:0 0 auto">标题</span>
+        <input type="text" id="titleInput" class="grow" value="最XX的角色 9宫格" maxlength="40">
+      </div>
+      <div class="row">
+        <span class="muted" style="flex:0 0 auto">制作人 <span style="color:var(--danger)">*</span></span>
+        <input type="text" id="producerInput" class="grow" placeholder="必填：导出图上会显示这个名字" maxlength="30">
+      </div>
+      <div class="row">
+        <span class="muted">导出立绘清晰度</span>
+        <select id="imgSize">
+          <option value="l" selected>高清（large，默认，立绘更清晰）</option>
+          <option value="m">标准（medium，体积更小）</option>
+        </select>
+        <div class="sep"></div>
+        <button class="primary" id="exportBtn">导出 PNG</button>
+        <button id="exportNoImgBtn" title="只画标签和角色名，不画立绘；跨域图片导致导出失败时的兜底">导出（不含立绘）</button>
+      </div>
+      <div class="note warn" id="producerNote" style="display:none">
+        <b>制作人还没填</b>，导出已取消。这是硬性要求：导出图上必须体现制作人，填好后就能导出。
+      </div>
+      <div class="status" id="exportStatus"></div>
+    </section>
+  </main>
+
+  <!-- ================= 右：角色选择器 ================= -->
+  <aside>
+    <section class="card">
+      <h2>① 搜索作品</h2>
+      <div class="target-bar" id="targetBar">先点左边的格子，选中要填哪一格。</div>
+      <div class="row">
+        <input type="text" id="kw" class="grow" placeholder="输入作品名，例如：little busters">
+        <button class="primary" id="searchBtn">搜索</button>
+      </div>
+      <div class="status" id="searchStatus"></div>
+      <div class="list" id="subjectList"></div>
+    </section>
+
+    <section class="card">
+      <h2>② 选择角色 <span class="hint">立绘 + 名字</span></h2>
+      <div class="chars" id="charList"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="clearCell">清空该格</button>
+        <button id="localImg" title="用本地图片替代该格立绘（本地图片不受跨域限制，导出一定包含它）">该格用本地图片</button>
+        <input type="file" id="localImgFile" accept="image/*" style="display:none">
+      </div>
+      <div class="muted" id="charHint" style="margin-top:6px"></div>
+    </section>
+
+    <section class="card">
+      <h2>接口不通时：粘贴 JSON 继续用</h2>
+      <div class="note">
+        浏览器的跨域策略加上 Bangumi 接口本身的限制，直接在网页里调用有可能失败
+        （本工具的实测结论与原因见 README）。这时可以用下面这条<b>不用跨域</b>的路子：
+        在浏览器新标签里打开接口地址，把返回的 JSON 整段复制过来粘贴即可。
+      </div>
+      <details class="paste">
+        <summary>怎么拿到这段 JSON？（点开看步骤）</summary>
+        <div class="muted" style="line-height:1.9">
+          <b>要作品列表：</b>新标签打开<br>
+          <code id="u1">https://api.bgm.tv/search/subject/关键词?type=2&amp;responseGroup=small</code><br>
+          把地址里的「关键词」换成你要搜的作品名（中文也行），回车后页面上会显示一段 JSON，全选复制。<br><br>
+          <b>要某部作品的角色：</b>先在 Bangumi 网页找到作品，记下地址里的数字 ID（形如 <code>bgm.tv/subject/38040</code> 里的 <code>38040</code>），
+          然后新标签打开<br>
+          <code id="u2">https://api.bgm.tv/v0/subjects/作品ID/characters</code><br>
+          同样会直接显示一段 JSON，全选复制。<br><br>
+          小贴士：直接在地址栏打开是<b>不带 Origin 头</b>的普通导航请求，所以能正常返回；
+          而在网页里用 fetch 会被浏览器加上 Origin 头，这正是接口会失败的原因之一。
+          粘贴的 JSON 支持这几种形状：作品的 <code>{"data":[...]}</code> / <code>{"list":[...]}</code> / <code>[...]</code>，
+          角色的 <code>[{name,images,relation}]</code> / <code>{"crt":[...]}</code>。
+        </div>
+      </details>
+      <div class="row" style="margin-top:10px">
+        <a id="openChars" class="muted" href="#" target="_blank" rel="noopener" style="display:none">在新标签打开当前作品的角色接口 ↗</a>
+      </div>
+      <textarea id="pasteBox" rows="5" placeholder="把复制到的 JSON 粘贴到这里…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="pasteAsSubjects">当作「作品列表」解析</button>
+        <button id="pasteAsChars">当作「角色列表」解析</button>
+        <button class="ghost" id="pasteClear">清空</button>
+      </div>
+      <div class="status" id="pasteStatus"></div>
+    </section>
+  </aside>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* =========================================================================
+   最XX的角色 9宫格
+   -------------------------------------------------------------------------
+   全部逻辑都在这一个 <script> 里，没有构建步骤、没有外部依赖。
+
+   实测得到的三条关键结论（决定了下面代码为什么这么写，详见 README.md）：
+   A) api.bgm.tv/v0/search/subjects（POST）
+      在我们探测时该路由整体返回 502（Cloudflare 转发的 nginx 502），
+      且 POST+JSON 会触发预检 OPTIONS，而 OPTIONS 同样 502。
+      → 浏览器里这条路走不通，必须降级。
+   B) api.bgm.tv/v0/subjects/{id}/characters（GET）
+      不带 Origin：200 正常返回；
+      带 Origin（浏览器 fetch 一定会带）：6/6 全部 502；
+      而且即使拿到 200，响应里也没有 Access-Control-Allow-Origin。
+      → 浏览器里同样走不通，必须降级。
+      但注意：在地址栏直接打开这个地址（普通导航、无 Origin）是能拿到 JSON 的，
+      这也是“粘贴 JSON”降级方案能成立的原因。
+   C) lain.bgm.tv 的图片：不带任何 CORS 响应头。
+      → 用 <img crossorigin> 会直接加载失败；用普通 <img> 显示没问题，
+        但画进 canvas 会污染画布，toBlob/toDataURL 会抛 SecurityError。
+      好消息：把域名换成 api.bgm.tv 的同一路径，响应就带 Access-Control-Allow-Origin: *，
+        于是“导出带立绘的 PNG”才成立。下面的 BGM_IMG_PROXY_HOST 就是干这个的。
+   ========================================================================= */
+
+/* ------------------------------ 常量与工具 ------------------------------ */
+
+var API = 'https://api.bgm.tv';
+
+// 图片域名替换：lain.bgm.tv 没有 CORS 头，api.bgm.tv 同路径有 ACAO:*。
+// 这是整个“canvas 导出含立绘 PNG”能成立的关键一环。
+var BGM_IMG_HOST = 'lain.bgm.tv';
+var BGM_IMG_HOST_CORS = 'api.bgm.tv';
+
+var DEFAULT_LABELS = ['最喜欢', '最遗憾', '最神秘', '最鬼畜', '最可爱', '最智慧', '最不正经', '最神人', '最败犬'];
+
+// 界面缩略图固定用 medium：实测 medium 约 220x264，而屏幕上的格子宽约 225px，
+// 正好是 1:1，既清晰又省流量、省内存（large 里出现过 800x2767 的大图）。
+// 导出时才按用户选择的清晰度重新取图，两者互不影响。
+var DISPLAY_SIZE = 'm';
+
+var MIN_COLS = 3, MAX_COLS = 4;
+var MIN_ROWS = 3, MAX_ROWS = 10;
+var MAX_CELLS = MAX_COLS * MAX_ROWS;   // 4 x 10 = 40
+
+var STORE_KEY = 'xxchar-9grid-v1';
+
+var $ = function (id) { return document.getElementById(id); };
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+var toastTimer = null;
+function toast(msg, isErr) {
+  var el = $('toast');
+  el.textContent = msg;
+  el.className = 'show' + (isErr ? ' err' : '');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.className = ''; }, 3200);
+}
+
+function setStatus(id, msg, kind) {
+  var el = $(id);
+  if (!el) return;
+  el.className = 'status' + (kind ? ' ' + kind : '');
+  el.innerHTML = msg || '';
+}
+
+// 带超时的 fetch。为什么需要超时：接口偶发卡住时，界面不能一直转圈没反馈。
+function fetchTimeout(url, init, ms) {
+  var ctl = new AbortController();
+  var timer = setTimeout(function () { ctl.abort(); }, ms || 12000);
+  var opt = Object.assign({}, init || {}, { signal: ctl.signal });
+  // 说明：这里的 headers 里刻意不写 User-Agent —— 浏览器禁止脚本设置该请求头，
+  // 写了也会被静默忽略，只能使用浏览器自身的 UA（实测 Bangumi 接受浏览器 UA）。
+  return fetch(url, opt).then(function (r) {
+    clearTimeout(timer);
+    return r;
+  }, function (e) {
+    clearTimeout(timer);
+    throw e;
+  });
+}
+
+/* --------------------------- 图片 URL 规范化 --------------------------- */
+
+// 把 Bangumi 的图片地址统一成“带 CORS 头、且使用 HTTPS”的形式。
+// 1) http -> https：旧接口（/subject/{id}?responseGroup=large）返回的是 http:// 地址，
+//    在 https 页面或 file:// 页面里加载 http 图片会被混合内容策略拦掉。
+// 2) lain.bgm.tv -> api.bgm.tv：为了让 canvas 不被污染（见文件头结论 C）。
+// 3) 替换尺寸段：同一个文件有 s/g/m/l 四种尺寸，路径形如 /pic/crt/<size>/……
+function normalizeImg(url, size) {
+  if (!url) return '';
+  var s = String(url).trim();
+  s = s.replace(/^http:\/\//i, 'https://');
+  s = s.replace(/^https:\/\/lain\.bgm\.tv\//i, 'https://' + BGM_IMG_HOST_CORS + '/');
+  if (size) {
+    // 只替换 /pic/xxx/<s|g|m|l>/ 这一段，避免误伤其它路径
+    s = s.replace(/(\/pic\/[a-z]+\/)([sgml])\//i, '$1' + size + '/');
+  }
+  return s;
+}
+
+// 从角色对象的 images 里挑一个尺寸；缺了就往下退。
+function pickImg(images, size) {
+  if (!images) return '';
+  var order = [size, 'large', 'medium', 'grid', 'small'];
+  for (var i = 0; i < order.length; i++) {
+    var v = images[order[i]];
+    if (v) return normalizeImg(v, size || order[i]);
+  }
+  return '';
+}
+
+/* ------------------------------- 状态 -------------------------------- */
+
+var state = {
+  cols: 3,
+  rows: 3,
+  // cells[r][c] = { label: '标签', char: null | {id,name,name_cn,relation,images} }
+  cells: [],
+  title: '最XX的角色 9宫格',
+  producer: '',
+  imgSize: 'l',      // 导出用的立绘尺寸：默认 large，画质更好
+  target: null,      // 当前正在编辑的格子 {r,c}
+  swapMode: false,
+  swapSrc: null
+};
+
+var picker = {
+  subject: null,     // 当前选中的作品
+  subjects: [],      // 搜索结果
+  chars: [],         // 当前作品的角色
+  from: ''           // 数据来自哪个接口（用于界面提示）
+};
+
+function makeCell(label) {
+  return { label: label || '', char: null };
+}
+
+// 用默认标签初始化 3x3；超出 9 格的格子标签留空，交给用户自己写。
+function buildDefaultGrid() {
+  var cells = [];
+  var k = 0;
+  for (var r = 0; r < state.rows; r++) {
+    var row = [];
+    for (var c = 0; c < state.cols; c++) {
+      row.push(makeCell(k < DEFAULT_LABELS.length ? DEFAULT_LABELS[k] : ''));
+      k++;
+    }
+    cells.push(row);
+  }
+  return cells;
+}
+
+/* ----------------------------- 本地持久化 ----------------------------- */
+/* 说明：localStorage 里只存“可序列化”的数据。本地图片用的是 blob: URL，
+   刷新后就失效，所以持久化时会把本地图片丢掉并在界面上提示，避免出现坏图。 */
+
+function saveState() {
+  try {
+    var cells = state.cells.map(function (row) {
+      return row.map(function (cell) {
+        var c = null;
+        if (cell.char) {
+          c = {
+            id: cell.char.id, name: cell.char.name, name_cn: cell.char.name_cn,
+            relation: cell.char.relation, images: cell.char.images, subject: cell.char.subject
+          };
+          if (cell.char.localUrl) c = null;  // 本地图片不持久化（blob 会失效）
+        }
+        return { label: cell.label, char: c };
+      });
+    });
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      cols: state.cols, rows: state.rows, cells: cells,
+      title: state.title, producer: state.producer, imgSize: state.imgSize
+    }));
+  } catch (e) { /* file:// 下某些浏览器禁用 localStorage，忽略即可 */ }
+}
+
+function loadState() {
+  try {
+    var raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return false;
+    var d = JSON.parse(raw);
+    if (!d || !Array.isArray(d.cells)) return false;
+    state.cols = Math.min(MAX_COLS, Math.max(MIN_COLS, d.cols || 3));
+    state.rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, d.rows || 3));
+    state.cells = d.cells;
+    if (typeof d.title === 'string') state.title = d.title;
+    if (typeof d.producer === 'string') state.producer = d.producer;
+    if (d.imgSize === 'l' || d.imgSize === 'm') state.imgSize = d.imgSize;
+    // 尺寸自检：数据损坏时重建，避免后面取 cells[r][c] 直接报错
+    if (state.cells.length !== state.rows || state.cells.some(function (r) { return !Array.isArray(r) || r.length !== state.cols; })) {
+      state.cells = buildDefaultGrid();
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* --------------------------- Bangumi 数据层 --------------------------- */
+/* 每个动作都是“先试需求指定的 v0 接口，失败再退到实测可用的旧接口”，
+   并把最终用了哪条路显示在界面上，方便用户判断。 */
+
+function v0SubjectToItem(s) {
+  return {
+    id: s.id,
+    name: s.name || '',
+    name_cn: s.name_cn || '',
+    date: s.date || '',
+    images: s.images || null,
+    score: (s.rating && s.rating.score) || null
+  };
+}
+
+// 搜索作品 —— 方案 1：POST /v0/search/subjects（需求指定）
+function searchSubjectsV0(kw) {
+  return fetchTimeout(API + '/v0/search/subjects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword: kw, filter: { type: [2] } })
+  }, 10000).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function (j) {
+    var arr = (j && j.data) || [];
+    return arr.map(v0SubjectToItem);
+  });
+}
+
+// 搜索作品 —— 方案 2：旧版公开接口（实测带 Access-Control-Allow-Origin: *）
+function searchSubjectsLegacy(kw) {
+  var url = API + '/search/subject/' + encodeURIComponent(kw) + '?type=2&responseGroup=small';
+  return fetchTimeout(url, {}, 12000).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function (j) {
+    if (j && j.code && j.code !== 200 && !j.list) return [];
+    return (j && j.list) || [];
+  });
+}
+
+// 取角色 —— 方案 1：GET /v0/subjects/{id}/characters（需求指定）
+function fetchCharsV0(id) {
+  return fetchTimeout(API + '/v0/subjects/' + id + '/characters', {}, 12000).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function (arr) {
+    if (!Array.isArray(arr)) throw new Error('返回不是数组');
+    return arr.map(function (c) {
+      return {
+        id: c.id, name: c.name || '', name_cn: '',
+        relation: c.relation || '', images: c.images || null
+      };
+    });
+  });
+}
+
+// 取角色 —— 方案 2：旧版 GET /subject/{id}?responseGroup=large，返回里的 crt 就是角色数组
+// 注意：实测旧接口返回的 crt 数量可能少于 v0（例：作品 38040 在 v0 是 19 个、旧接口是 12 个）。
+function fetchCharsLegacy(id) {
+  return fetchTimeout(API + '/subject/' + id + '?responseGroup=large', {}, 15000).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function (j) {
+    var crt = (j && j.crt) || [];
+    if (!crt.length) throw new Error('旧接口没有返回角色列表');
+    return crt.map(function (c) {
+      var cn = (c.info && c.info.name_cn) || '';
+      return {
+        id: c.id, name: c.name || '', name_cn: cn,
+        relation: c.role_name || '', images: c.images || null
+      };
+    });
+  });
+}
+
+function searchSubjects(kw) {
+  setStatus('searchStatus', '<span class="spin"></span> 正在搜索…');
+  return searchSubjectsV0(kw).then(function (list) {
+    picker.from = 'v0 接口（POST /v0/search/subjects）';
+    return list;
+  }).catch(function (e1) {
+    // v0 走不通（探测时该路由整体 502；浏览器还会被 CORS 挡）→ 自动降级
+    return searchSubjectsLegacy(kw).then(function (list) {
+      picker.from = '旧版公开接口（GET /search/subject/…，带 CORS 头）';
+      return list;
+    }).catch(function (e2) {
+      var err = new Error('两条路都失败了：v0 接口 ' + e1.message + '；旧接口 ' + e2.message);
+      err.needPaste = true;
+      throw err;
+    });
+  });
+}
+
+function fetchCharacters(subject) {
+  var id = subject.id;
+  return fetchCharsV0(id).then(function (list) {
+    picker.from = 'v0 接口（GET /v0/subjects/{id}/characters）';
+    return list;
+  }).catch(function (e1) {
+    // 关键降级：浏览器 fetch 一定会带 Origin 头，而实测带 Origin 时该接口 100% 返回 502，
+    // 所以这里几乎必然走到旧接口分支。
+    return fetchCharsLegacy(id).then(function (list) {
+      picker.from = '旧版公开接口（GET /subject/{id}?responseGroup=large 的 crt 字段）';
+      return list;
+    }).catch(function (e2) {
+      var err = new Error('两条路都失败了：v0 接口 ' + e1.message + '；旧接口 ' + e2.message);
+      err.needPaste = true;
+      throw err;
+    });
+  });
+}
+
+/* ---------------------------- 粘贴 JSON 解析 ---------------------------- */
+/* 解析要尽量宽容：支持 v0 / 旧接口 / 手抄的数组，形状不对时给出人话提示。 */
+
+function parsePastedSubjects(text) {
+  var d = JSON.parse(text);
+  var arr = null;
+  if (Array.isArray(d)) arr = d;
+  else if (d && Array.isArray(d.data)) arr = d.data;      // v0 搜索
+  else if (d && Array.isArray(d.list)) arr = d.list;      // 旧搜索
+  if (!arr) throw new Error('没认出作品列表：需要是数组，或者含 data / list 字段的对象');
+  return arr.map(function (s) {
+    return {
+      id: s.id, name: s.name || '', name_cn: s.name_cn || '',
+      date: s.date || s.air_date || '', images: s.images || null,
+      score: (s.rating && s.rating.score) || s.score || null
+    };
+  }).filter(function (s) { return s.id; });
+}
+
+function parsePastedChars(text) {
+  var d = JSON.parse(text);
+  var arr = null;
+  if (Array.isArray(d)) arr = d;
+  else if (d && Array.isArray(d.crt)) arr = d.crt;        // 旧接口作品详情
+  else if (d && Array.isArray(d.data)) arr = d.data;
+  if (!arr) throw new Error('没认出角色列表：需要是数组，或者含 crt / data 字段的对象');
+  return arr.map(function (c) {
+    var cn = (c.info && c.info.name_cn) || c.name_cn || '';
+    // 有些人会把 images 直接写成字符串，这里一并兼容
+    var images = c.images;
+    if (typeof images === 'string') images = { large: images, grid: images, medium: images };
+    return {
+      id: c.id, name: c.name || '', name_cn: cn,
+      relation: c.relation || c.role_name || '', images: images || null
+    };
+  }).filter(function (c) { return c.name; });
+}
+
+/* ------------------------------ 图片加载 ------------------------------ */
+/* 统一走 CORS 加载（crossOrigin='anonymous'），这样画进 canvas 不会污染画布。
+   万一某个图片域名没有 CORS 头，再退回普通加载：能显示，但导出时会被标为“不可导出”。 */
+
+var imgCache = {};   // url -> { img: Image, clean: bool, status: 'ok'|'fail' }
+
+function loadImage(url, useCors, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    var img = new Image();
+    if (useCors) img.crossOrigin = 'anonymous';   // 必须在 src 之前设置，顺序反了不生效
+    img.referrerPolicy = 'no-referrer';           // 图片域名不校验 Referer，加上更保险
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      reject(new Error('图片加载超时'));
+    }, timeoutMs || 20000);
+    img.onload = function () {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      resolve(img);
+    };
+    img.onerror = function () {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      reject(new Error('图片加载失败'));
+    };
+    img.src = url;
+  });
+}
+
+// 供导出使用：拿到一个“干净”（不会污染画布）的 Image；失败则返回 null
+function getCleanImage(url) {
+  if (!url) return Promise.resolve(null);
+  var hit = imgCache[url];
+  if (hit && hit.status === 'ok') return Promise.resolve(hit.clean ? hit.img : null);
+  return loadImage(url, true).then(function (img) {
+    imgCache[url] = { img: img, clean: true, status: 'ok' };
+    return img;
+  }).catch(function () {
+    // CORS 加载失败：再用普通方式加载一次，仅供显示。
+    // 注意这种情况下画布会被污染，导不出来 —— 界面上会明确标注。
+    imgCache[url] = { clean: false, status: 'fail' };
+    return null;
+  });
+}
+
+/* ------------------------------- 渲染 ------------------------------- */
+
+function render() {
+  var grid = $('grid');
+  grid.style.setProperty('--cols', state.cols);
+  var html = '';
+  for (var r = 0; r < state.rows; r++) {
+    for (var c = 0; c < state.cols; c++) {
+      var cell = state.cells[r][c];
+      var isTarget = state.target && state.target.r === r && state.target.c === c;
+      var isSwapSrc = state.swapSrc && state.swapSrc.r === r && state.swapSrc.c === c;
+      var cls = 'cell' + (isTarget ? ' target' : '') + (isSwapSrc ? ' swap-src' : '');
+      var labelCls = 'label' + (cell.label ? '' : ' empty');
+      var labelTxt = cell.label ? esc(cell.label) : '点击写标签';
+      html += '<div class="' + cls + '" data-r="' + r + '" data-c="' + c + '" draggable="true" title="第 ' + (r + 1) + ' 行第 ' + (c + 1) + ' 列">';
+      html += '<div class="' + labelCls + '" data-role="label">' + labelTxt + '</div>';
+      html += '<div class="pic" data-role="pic">' + picInner(cell) + '</div>';
+      html += '<div class="nm">' + nameInner(cell) + '</div>';
+      html += '<span class="idx">' + (r * state.cols + c + 1) + '</span>';
+      html += '</div>';
+    }
+  }
+  grid.innerHTML = html;
+  $('colNum').textContent = state.cols;
+  $('rowNum').textContent = state.rows;
+  $('cellCount').textContent = '共 ' + (state.cols * state.rows) + ' 格';
+  $('colMinus').disabled = state.cols <= MIN_COLS;
+  $('colPlus').disabled = state.cols >= MAX_COLS;
+  $('rowMinus').disabled = state.rows <= MIN_ROWS;
+  $('rowPlus').disabled = state.rows >= MAX_ROWS;
+  $('swapMode').className = state.swapMode ? 'on' : '';
+
+  // 新格子还没写标签时给个显眼提示（新增格子的标签需要用户自己写）
+  var empties = 0;
+  for (var r2 = 0; r2 < state.rows; r2++)
+    for (var c2 = 0; c2 < state.cols; c2++)
+      if (!state.cells[r2][c2].label) empties++;
+  var note = $('labelNote');
+  if (empties > 0) {
+    note.style.display = 'block';
+    note.innerHTML = '有 <b>' + empties + '</b> 个格子还没写标签。新增的格子标签需要你自己写：' +
+      '点格子左上角的「点击写标签」直接输入即可（默认的 9 个标签也可以随时改写）。' +
+      '不想逐个写的话，可以点上面的「补齐默认标签」。';
+  } else {
+    note.style.display = 'none';
+  }
+  renderTargetBar();
+}
+
+function picInner(cell) {
+  var ch = cell.char;
+  if (!ch) return '<span class="ph">点这一格选角色</span>';
+  var url = ch.localUrl || pickImg(ch.images, DISPLAY_SIZE);
+  if (!url) return '<span class="ph">这个角色没有立绘</span>';
+  // 交替用 CORS 加载：成功则导出时能带上立绘；失败则自动退回普通加载（只保证显示）。
+  // 这段逻辑写在 onerror 里，是因为浏览器不会提前告诉我们某个域名有没有 CORS 头。
+  var taint = imgCache[url] && imgCache[url].status === 'fail' ? '<span class="badge-taint">跨域</span>' : '';
+  return '<img src="' + esc(url) + '" crossorigin="anonymous" referrerpolicy="no-referrer" ' +
+    'alt="' + esc(ch.name) + '" data-url="' + esc(url) + '" data-retried="0">' + taint;
+}
+
+function nameInner(cell) {
+  var ch = cell.char;
+  if (!ch) return '';
+  var n1 = ch.name_cn || ch.name || '';
+  var n2 = (ch.name_cn && ch.name && ch.name_cn !== ch.name) ? ch.name : '';
+  var h = '<div class="n1">' + esc(n1) + '</div>';
+  if (n2) h += '<div class="n2">' + esc(n2) + '</div>';
+  return h;
+}
+
+function renderTargetBar() {
+  var bar = $('targetBar');
+  if (!state.target) {
+    bar.innerHTML = '先点左边的格子，选中要填哪一格。';
+    return;
+  }
+  var cell = state.cells[state.target.r][state.target.c];
+  bar.innerHTML = '正在编辑：第 <b>' + (state.target.r + 1) + '</b> 行第 <b>' + (state.target.c + 1) +
+    '</b> 列 · 标签「<b>' + esc(cell.label || '未命名') + '</b>」' +
+    (cell.char ? ' · 当前角色 <b>' + esc(cell.char.name_cn || cell.char.name) + '</b>' : ' · 还是空的');
+}
+
+function renderSubjects() {
+  var box = $('subjectList');
+  if (!picker.subjects.length) { box.innerHTML = ''; return; }
+  var html = '';
+  picker.subjects.forEach(function (s, i) {
+    var cover = s.images ? normalizeImg(s.images.grid || s.images.small || s.images.medium || s.images.large || s.images.common, 'm') : '';
+    var sel = picker.subject && picker.subject.id === s.id ? ' sel' : '';
+    html += '<div class="item' + sel + '" data-i="' + i + '">' +
+      (cover ? '<img src="' + esc(cover) + '" crossorigin="anonymous" referrerpolicy="no-referrer" alt="">' : '<div style="width:34px;height:34px;border-radius:5px;background:#f0f1f6;flex:0 0 auto"></div>') +
+      '<div class="t"><div class="l1">' + esc(s.name_cn || s.name) + '</div>' +
+      '<div class="l2">' + esc(s.name) + (s.date ? ' · ' + esc(s.date) : '') + ' · ID ' + s.id + '</div></div>' +
+      '</div>';
+  });
+  box.innerHTML = html;
+}
+
+function renderChars() {
+  var box = $('charList');
+  if (!picker.chars.length) { box.innerHTML = ''; return; }
+  var html = '';
+  picker.chars.forEach(function (ch, i) {
+    var url = pickImg(ch.images, DISPLAY_SIZE);
+    var img = url
+      ? '<img src="' + esc(url) + '" crossorigin="anonymous" referrerpolicy="no-referrer" alt="" loading="lazy">'
+      : '<div class="noimg">无立绘</div>';
+    html += '<div class="ch" data-i="' + i + '" title="' + esc(ch.name + (ch.name_cn ? ' / ' + ch.name_cn : '') + (ch.relation ? ' · ' + ch.relation : '')) + '">' +
+      img + '<div class="cn">' + esc(ch.name_cn || ch.name) + '</div></div>';
+  });
+  box.innerHTML = html;
+}
+
+/* ------------------------------ 交互逻辑 ------------------------------ */
+
+function setChar(r, c, ch) {
+  state.cells[r][c].char = ch;
+  // 图片改为按需加载：这里先把缓存里可能存在的旧图清掉，避免状态错乱
+  render();
+  saveState();
+}
+
+function clearCell(r, c) {
+  state.cells[r][c].char = null;
+  render();
+  saveState();
+}
+
+function swapChars(a, b) {
+  if (!a || !b) return;
+  if (a.r === b.r && a.c === b.c) return;
+  var t = state.cells[a.r][a.c].char;
+  state.cells[a.r][a.c].char = state.cells[b.r][b.c].char;
+  state.cells[b.r][b.c].char = t;
+  state.swapSrc = null;
+  render();
+  saveState();
+  toast('已交换两个格子的角色（标签不动）');
+}
+
+function resize(newCols, newRows) {
+  newCols = Math.min(MAX_COLS, Math.max(MIN_COLS, newCols));
+  newRows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, newRows));
+  if (newCols === state.cols && newRows === state.rows) return;
+
+  // 缩小时会丢数据，先确认
+  var lost = 0;
+  for (var r = 0; r < state.rows; r++)
+    for (var c = 0; c < state.cols; c++)
+      if ((r >= newRows || c >= newCols) && state.cells[r][c].char) lost++;
+  if (lost > 0 && !confirm('缩小后会丢掉 ' + lost + ' 个格子里的角色，确定继续吗？')) return;
+
+  var next = [];
+  for (var r2 = 0; r2 < newRows; r2++) {
+    var row = [];
+    for (var c2 = 0; c2 < newCols; c2++) {
+      if (r2 < state.rows && c2 < state.cols) row.push(state.cells[r2][c2]);
+      else row.push(makeCell(''));   // 新增格子：标签留空，由用户自己写
+    }
+    next.push(row);
+  }
+  state.cells = next;
+  state.cols = newCols;
+  state.rows = newRows;
+  if (state.target && (state.target.r >= newRows || state.target.c >= newCols)) state.target = null;
+  state.swapSrc = null;
+  render();
+  saveState();
+}
+
+// 把空格子按“默认标签顺序”补上（只补空的，不动用户改过的）
+function fillDefaults() {
+  var k = 0, filled = 0;
+  for (var r = 0; r < state.rows; r++) {
+    for (var c = 0; c < state.cols; c++) {
+      var cell = state.cells[r][c];
+      if (!cell.label && k < DEFAULT_LABELS.length) { cell.label = DEFAULT_LABELS[k]; filled++; }
+      k++;
+    }
+  }
+  render();
+  saveState();
+  toast(filled ? '已补齐 ' + filled + ' 个默认标签' : '没有需要补齐的格子');
+}
+
+/* ---------------------- 网格上的事件（委托到容器） ---------------------- */
+
+$('grid').addEventListener('click', function (ev) {
+  var cellEl = ev.target.closest ? ev.target.closest('.cell') : null;
+  if (!cellEl) return;
+  var r = +cellEl.dataset.r, c = +cellEl.dataset.c;
+
+  // 点标签 -> 直接改名（需求：点格子上的标签直接编辑）
+  var labelEl = ev.target.closest('.label');
+  if (labelEl) {
+    ev.stopPropagation();
+    startEditLabel(cellEl, r, c, labelEl);
+    return;
+  }
+  if (ev.target.closest('.label-input')) return;
+
+  if (state.swapMode) {
+    if (!state.swapSrc) {
+      state.swapSrc = { r: r, c: c };
+      render();
+      toast('已选第一格，再点另一格完成交换');
+    } else {
+      swapChars(state.swapSrc, { r: r, c: c });
+    }
+    return;
+  }
+  state.target = { r: r, c: c };
+  render();
+  $('charHint').textContent = '已选中第 ' + (r + 1) + ' 行第 ' + (c + 1) + ' 列，在下面点一个角色即可填入。';
+});
+
+function startEditLabel(cellEl, r, c, labelEl) {
+  var old = state.cells[r][c].label;
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'label-input';
+  input.value = old;
+  input.maxLength = 12;
+  input.placeholder = '写个标签';
+  labelEl.parentNode.replaceChild(input, labelEl);
+  input.focus();
+  input.select();
+  var committed = false;
+  function commit(save) {
+    if (committed) return;
+    committed = true;
+    if (save) {
+      state.cells[r][c].label = input.value.trim();
+      saveState();
+    }
+    render();
+  }
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+  input.addEventListener('blur', function () { commit(true); });
+  input.addEventListener('click', function (e) { e.stopPropagation(); });
+  // 输入框不要触发格子的拖动
+  input.addEventListener('dragstart', function (e) { e.preventDefault(); });
+  input.draggable = false;
+}
+
+/* ------------------------- 网格拖放交换（原生 DnD） ------------------------- */
+
+var dragFrom = null;
+$('grid').addEventListener('dragstart', function (ev) {
+  var cellEl = ev.target.closest ? ev.target.closest('.cell') : null;
+  if (!cellEl) return;
+  dragFrom = { r: +cellEl.dataset.r, c: +cellEl.dataset.c };
+  cellEl.classList.add('dragging');
+  try { ev.dataTransfer.setData('text/plain', dragFrom.r + ',' + dragFrom.c); } catch (e) {}
+  try { ev.dataTransfer.effectAllowed = 'move'; } catch (e) {}
+});
+$('grid').addEventListener('dragend', function (ev) {
+  var cellEl = ev.target.closest ? ev.target.closest('.cell') : null;
+  if (cellEl) cellEl.classList.remove('dragging');
+  Array.prototype.forEach.call(document.querySelectorAll('.cell.drop-hover'), function (el) {
+    el.classList.remove('drop-hover');
+  });
+});
+$('grid').addEventListener('dragover', function (ev) {
+  var cellEl = ev.target.closest ? ev.target.closest('.cell') : null;
+  if (!cellEl || !dragFrom) return;
+  ev.preventDefault();
+  try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+  cellEl.classList.add('drop-hover');
+});
+$('grid').addEventListener('dragleave', function (ev) {
+  var cellEl = ev.target.closest ? ev.target.closest('.cell') : null;
+  if (cellEl) cellEl.classList.remove('drop-hover');
+});
+$('grid').addEventListener('drop', function (ev) {
+  var cellEl = ev.target.closest ? ev.target.closest('.cell') : null;
+  if (!cellEl || !dragFrom) return;
+  ev.preventDefault();
+  cellEl.classList.remove('drop-hover');
+  swapChars(dragFrom, { r: +cellEl.dataset.r, c: +cellEl.dataset.c });
+  dragFrom = null;
+});
+
+/* --------- 网格里图片加载失败时：退回普通加载（能显示但不可导出） --------- */
+/* 为什么需要这段：并非所有图片域名都带 CORS 头。带 CORS 加载失败时如果不管，
+   用户会看到一个裂图；退回普通 <img> 至少能正常显示，只是导出时不含这张立绘。 */
+$('grid').addEventListener('error', function (ev) {
+  var img = ev.target;
+  if (!img || img.tagName !== 'IMG') return;
+  if (img.dataset.retried === '1') return;
+  img.dataset.retried = '1';
+  var url = img.dataset.url || img.src;
+  imgCache[url] = { clean: false, status: 'fail' };
+  img.removeAttribute('crossorigin');
+  // 加个无害的查询参数，避免复用那份“没有 CORS 头”的缓存响应
+  img.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + '_corsretry=1';
+  var pic = img.closest('.pic');
+  if (pic && !pic.querySelector('.badge-taint')) {
+    var b = document.createElement('span');
+    b.className = 'badge-taint';
+    b.textContent = '跨域';
+    b.title = '这张图所在域名没有 CORS 头：页面里能显示，但导出 PNG 时无法把它画进画布，导出时会用占位块代替。';
+    pic.appendChild(b);
+  }
+}, true);
+
+/* ------------------------------- 顶部按钮 ------------------------------- */
+
+$('colMinus').addEventListener('click', function () { resize(state.cols - 1, state.rows); });
+$('colPlus').addEventListener('click', function () { resize(state.cols + 1, state.rows); });
+$('rowMinus').addEventListener('click', function () { resize(state.cols, state.rows - 1); });
+$('rowPlus').addEventListener('click', function () { resize(state.cols, state.rows + 1); });
+
+$('swapMode').addEventListener('click', function () {
+  state.swapMode = !state.swapMode;
+  state.swapSrc = null;
+  render();
+  toast(state.swapMode ? '点击交换模式：依次点两个格子即可交换角色' : '已退出点击交换模式');
+});
+
+$('fillDefaults').addEventListener('click', fillDefaults);
+
+$('clearAll').addEventListener('click', function () {
+  if (!confirm('确定清空所有格子里的角色吗？（标签会保留）')) return;
+  for (var r = 0; r < state.rows; r++)
+    for (var c = 0; c < state.cols; c++) state.cells[r][c].char = null;
+  render();
+  saveState();
+  toast('已清空所有角色');
+});
+
+/* ------------------------------- 搜索交互 ------------------------------- */
+
+function doSearch() {
+  var kw = $('kw').value.trim();
+  if (!kw) { toast('先输入作品名', true); $('kw').focus(); return; }
+  picker.subject = null;
+  picker.chars = [];
+  renderChars();
+  searchSubjects(kw).then(function (list) {
+    picker.subjects = list;
+    renderSubjects();
+    if (!list.length) {
+      setStatus('searchStatus', '没有找到作品。换个关键词试试，或改用下面的「粘贴 JSON」。');
+    } else {
+      setStatus('searchStatus', '找到 ' + list.length + ' 部作品 · 数据来自' + esc(picker.from), 'ok');
+    }
+  }).catch(function (e) {
+    picker.subjects = [];
+    renderSubjects();
+    // 明确告诉用户为什么失败、下一步怎么办（降级到粘贴 JSON）
+    setStatus('searchStatus',
+      '搜索失败：' + esc(e.message) + '<br>这通常是接口在浏览器里被跨域策略挡住或接口本身异常导致的。' +
+      '请改用下方「粘贴 JSON」的方式继续：在新标签打开 <code>' + API + '/search/subject/你的关键词?type=2&amp;responseGroup=small</code>，' +
+      '复制页面上的 JSON 后粘贴解析。', 'err');
+  });
+}
+
+$('searchBtn').addEventListener('click', doSearch);
+$('kw').addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
+
+$('subjectList').addEventListener('click', function (ev) {
+  var item = ev.target.closest ? ev.target.closest('.item') : null;
+  if (!item) return;
+  var s = picker.subjects[+item.dataset.i];
+  if (!s) return;
+  picker.subject = s;
+  renderSubjects();
+  $('charHint').textContent = '正在读取「' + (s.name_cn || s.name) + '」的登场角色…';
+  $('openChars').style.display = 'inline';
+  $('openChars').href = API + '/v0/subjects/' + s.id + '/characters';
+  fetchCharacters(s).then(function (list) {
+    picker.chars = list;
+    renderChars();
+    $('charHint').textContent = '共 ' + list.length + ' 个角色 · 数据来自' + picker.from +
+      '（旧接口返回的角色数可能少于 v0 接口，如果觉得少了，可以用粘贴 JSON 的方式换成 v0 数据）';
+  }).catch(function (e) {
+    picker.chars = [];
+    renderChars();
+    $('charHint').innerHTML = '<span style="color:var(--danger)">读取角色失败：' + esc(e.message) +
+      '</span><br>可以点上面的链接在新标签打开角色接口，把 JSON 复制到右侧下方粘贴解析。';
+  });
+});
+
+$('charList').addEventListener('click', function (ev) {
+  var ch = ev.target.closest ? ev.target.closest('.ch') : null;
+  if (!ch) return;
+  if (!state.target) { toast('请先点左边的一个格子，选中要填哪一格', true); return; }
+  var c = picker.chars[+ch.dataset.i];
+  if (!c) return;
+  var r = state.target.r, cc = state.target.c;
+  setChar(r, cc, {
+    id: c.id, name: c.name, name_cn: c.name_cn, relation: c.relation,
+    images: c.images, subject: picker.subject ? (picker.subject.name_cn || picker.subject.name) : ''
+  });
+  toast('已填入第 ' + (r + 1) + ' 行第 ' + (cc + 1) + ' 列：' + (c.name_cn || c.name));
+});
+
+$('clearCell').addEventListener('click', function () {
+  if (!state.target) { toast('请先点左边的一个格子', true); return; }
+  clearCell(state.target.r, state.target.c);
+  toast('已清空该格的角色');
+});
+
+/* ----------------------------- 本地图片替换 ----------------------------- */
+/* 用途：某些图片域名没有 CORS 头，导不出来。用本地图片（blob:）不受跨域限制，
+   画进 canvas 不会被判定为污染，因此导出一定包含它。 */
+
+$('localImg').addEventListener('click', function () {
+  if (!state.target) { toast('请先点左边的一个格子', true); return; }
+  $('localImgFile').click();
+});
+
+$('localImgFile').addEventListener('change', function (ev) {
+  var file = ev.target.files && ev.target.files[0];
+  ev.target.value = '';
+  if (!file || !state.target) return;
+  var url = URL.createObjectURL(file);
+  var r = state.target.r, c = state.target.c;
+  var cell = state.cells[r][c];
+  var name = cell.char ? cell.char.name : (file.name.replace(/\.[^.]+$/, ''));
+  cell.char = {
+    id: null, name: name, name_cn: cell.char ? cell.char.name_cn : name,
+    relation: '', images: null, localUrl: url, localName: file.name
+  };
+  render();
+  toast('已为该格换上本地图片（本地图片不会被持久化保存，刷新后需要重新指定）');
+});
+
+/* ---------------------------- 粘贴 JSON 交互 ---------------------------- */
+
+$('pasteAsSubjects').addEventListener('click', function () {
+  var t = $('pasteBox').value.trim();
+  if (!t) { setStatus('pasteStatus', '先把 JSON 粘贴到上面的文本框里。', 'err'); return; }
+  try {
+    var list = parsePastedSubjects(t);
+    if (!list.length) throw new Error('解析成功但没有有效的作品（缺少 id）');
+    picker.subjects = list;
+    picker.from = '手动粘贴的 JSON';
+    renderSubjects();
+    setStatus('pasteStatus', '已解析 ' + list.length + ' 部作品，点上面列表里的作品即可读取角色。', 'ok');
+    toast('已解析 ' + list.length + ' 部作品');
+  } catch (e) {
+    setStatus('pasteStatus', '解析失败：' + esc(e.message), 'err');
+  }
+});
+
+$('pasteAsChars').addEventListener('click', function () {
+  var t = $('pasteBox').value.trim();
+  if (!t) { setStatus('pasteStatus', '先把 JSON 粘贴到上面的文本框里。', 'err'); return; }
+  try {
+    var list = parsePastedChars(t);
+    if (!list.length) throw new Error('解析成功但没有有效的角色（缺少 name）');
+    picker.chars = list;
+    picker.from = '手动粘贴的 JSON';
+    renderChars();
+    setStatus('pasteStatus', '已解析 ' + list.length + ' 个角色，点上面的角色卡片即可填入当前格子。', 'ok');
+    toast('已解析 ' + list.length + ' 个角色');
+  } catch (e) {
+    setStatus('pasteStatus', '解析失败：' + esc(e.message), 'err');
+  }
+});
+
+$('pasteClear').addEventListener('click', function () {
+  $('pasteBox').value = '';
+  setStatus('pasteStatus', '');
+});
+
+/* ============================ 导出 PNG ============================ */
+/* 布局参数与 CSS 里的单格比例（230/276）保持一致，做到“所见即所得”。 */
+
+var EX = {
+  S: 2,              // 2 倍图：文字和高 DPI 屏幕上更锐利
+  CELL_W: 230,
+  CELL_H: 276,
+  PAD: 10,           // 格子内边距
+  LABEL_H: 26,
+  GAP: 14,           // 格子间距
+  OUTER: 26,         // 整体外边距
+  HEAD_H: 96,
+  FOOT_H: 46,
+  IMG_R: 7,
+  CARD_R: 10,
+  BIAS: 0.2          // 立绘纵向裁切基准，与 CSS 的 object-position: center 20% 对应
+};
+
+function rrect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function fitText(ctx, text, maxW) {
+  text = String(text == null ? '' : text);
+  if (ctx.measureText(text).width <= maxW) return text;
+  var t = text;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
+
+// 把图片按 cover 方式画进目标矩形，纵向按 BIAS 偏移（和 CSS object-position: center 20% 对齐）
+// 注意这里的定位：调用方已经用 rrect+clip 圈出了目标矩形，
+// 所以要把“缩放后图片的第 (sx,sy) 点”对齐到 (dx,dy)，即在 (dx-sx, dy-sy) 处绘制整张缩放图。
+// （写成 (-sx,-sy) 会让立绘整体偏出格子，只剩一角可见。）
+function drawCover(ctx, img, dx, dy, dw, dh, bias) {
+  var iw = img.naturalWidth || img.width;
+  var ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return false;
+  var scale = Math.max(dw / iw, dh / ih);
+  var sw = iw * scale, sh = ih * scale;
+  var sx = (sw - dw) / 2;
+  var sy = (sh - dh) * (bias == null ? EX.BIAS : bias);
+  ctx.drawImage(img, dx - sx, dy - sy, sw, sh);
+  return true;
+}
+
+function exportFilename(ext) {
+  var d = new Date();
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' + pad(d.getHours()) + pad(d.getMinutes());
+  var who = (state.producer || '').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 20);
+  return '最XX的角色9宫格_' + who + '_' + stamp + '.' + ext;
+}
+
+function canvasToBlob(canvas) {
+  return new Promise(function (resolve, reject) {
+    if (canvas.toBlob) {
+      try {
+        canvas.toBlob(function (b) {
+          if (b) resolve(b); else reject(new Error('toBlob 返回空'));
+        }, 'image/png');
+      } catch (e) { reject(e); }
+    } else {
+      try {
+        var url = canvas.toDataURL('image/png');
+        var bin = atob(url.split(',')[1]);
+        var arr = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        resolve(new Blob([arr], { type: 'image/png' }));
+      } catch (e2) { reject(e2); }
+    }
+  });
+}
+
+function download(blob, filename) {
+  var a = document.createElement('a');
+  var url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 15000);
+}
+
+async function buildCanvas(withImages) {
+  var cols = state.cols, rows = state.rows, S = EX.S;
+  var W = EX.OUTER * 2 + cols * EX.CELL_W + (cols - 1) * EX.GAP;
+  var H = EX.HEAD_H + EX.OUTER + rows * EX.CELL_H + (rows - 1) * EX.GAP + EX.OUTER + EX.FOOT_H;
+
+  var cv = document.createElement('canvas');
+  cv.width = Math.round(W * S);
+  cv.height = Math.round(H * S);
+  var ctx = cv.getContext('2d');
+  ctx.scale(S, S);
+  ctx.textBaseline = 'alphabetic';
+
+  var FONT = '"Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", "Noto Sans CJK SC", sans-serif';
+
+  // ---- 背景 ----
+  ctx.fillStyle = '#f5f6fa';
+  ctx.fillRect(0, 0, W, H);
+
+  // ---- 顶部：标题 / 作品名 / 制作人 ----
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#23262e';
+  ctx.font = '700 30px ' + FONT;
+  ctx.fillText(fitText(ctx, state.title || '最XX的角色 9宫格', W - EX.OUTER * 2 - 240), EX.OUTER, 50);
+
+  // 副标题：把用到的作品名汇总一下，让人知道角色出自哪部作品
+  var works = [];
+  for (var r0 = 0; r0 < rows; r0++)
+    for (var c0 = 0; c0 < cols; c0++) {
+      var ch0 = state.cells[r0][c0].char;
+      if (ch0 && ch0.subject && works.indexOf(ch0.subject) < 0) works.push(ch0.subject);
+    }
+  ctx.fillStyle = '#8a90a0';
+  ctx.font = '14px ' + FONT;
+  var sub = works.length ? ('作品：' + works.join(' / ')) : '（还没有填入角色）';
+  ctx.fillText(fitText(ctx, sub, W - EX.OUTER * 2 - 240), EX.OUTER, 76);
+
+  // 制作人：右上角一块浅色底 + 文字，确保“导出图上有制作人”
+  ctx.font = '600 16px ' + FONT;
+  var who = '制作人：' + (state.producer || '');
+  var whoW = ctx.measureText(who).width + 26;
+  ctx.fillStyle = '#eef0fe';
+  rrect(ctx, W - EX.OUTER - whoW, 26, whoW, 34, 8);
+  ctx.fill();
+  ctx.fillStyle = '#4756c4';
+  ctx.textAlign = 'left';
+  ctx.fillText(who, W - EX.OUTER - whoW + 13, 49);
+
+  // ---- 竖线分隔 ----
+  ctx.strokeStyle = '#e6e8f0';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(EX.OUTER, EX.HEAD_H - 8);
+  ctx.lineTo(W - EX.OUTER, EX.HEAD_H - 8);
+  ctx.stroke();
+
+  // ---- 先画所有格子的底、标签、名字（不依赖网络，保证一定能出来） ----
+  var geo = [];
+  for (var r = 0; r < rows; r++) {
+    for (var c = 0; c < cols; c++) {
+      var x = EX.OUTER + c * (EX.CELL_W + EX.GAP);
+      var y = EX.HEAD_H + EX.OUTER + r * (EX.CELL_H + EX.GAP);
+      geo.push({ x: x, y: y, cell: state.cells[r][c], r: r, c: c, idx: r * cols + c + 1 });
+
+      // 卡片
+      ctx.save();
+      ctx.shadowColor = 'rgba(24,30,55,.07)';
+      ctx.shadowBlur = 8;
+      ctx.shadowOffsetY = 2;
+      ctx.fillStyle = '#ffffff';
+      rrect(ctx, x, y, EX.CELL_W, EX.CELL_H, EX.CARD_R);
+      ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = '#e6e8f0';
+      ctx.lineWidth = 1;
+      rrect(ctx, x + 0.5, y + 0.5, EX.CELL_W - 1, EX.CELL_H - 1, EX.CARD_R);
+      ctx.stroke();
+
+      var pad = EX.PAD;
+
+      // 标签（左上角的胶囊）。用 fitText 先截断，避免长标签被 clip 硬切掉半截。
+      var label = state.cells[r][c].label || '（未命名）';
+      ctx.font = '600 13px ' + FONT;
+      var labelText = fitText(ctx, label, EX.CELL_W - pad * 2 - 16);
+      var lw = Math.min(EX.CELL_W - pad * 2, ctx.measureText(labelText).width + 16);
+      ctx.fillStyle = '#eef0fe';
+      rrect(ctx, x + pad, y + pad, lw, EX.LABEL_H, 6);
+      ctx.fill();
+      ctx.fillStyle = '#4756c4';
+      ctx.textAlign = 'left';
+      ctx.save();
+      rrect(ctx, x + pad, y + pad, lw, EX.LABEL_H, 6);
+      ctx.clip();
+      ctx.fillText(labelText, x + pad + 8, y + pad + 18);
+      ctx.restore();
+
+      // 立绘占位（有图时会盖在上面）
+      var imgY = y + pad + EX.LABEL_H + 8;
+      var imgW = EX.CELL_W - pad * 2;
+      var nameBlock = 46;
+      var imgH = EX.CELL_H - (pad + EX.LABEL_H + 8) - 8 - nameBlock - pad;
+      geo[geo.length - 1].img = { x: x + pad, y: imgY, w: imgW, h: imgH };
+      ctx.fillStyle = '#f3f4f8';
+      rrect(ctx, x + pad, imgY, imgW, imgH, EX.IMG_R);
+      ctx.fill();
+
+      // 角色名（在图下方）
+      var ch = state.cells[r][c].char;
+      var cx = x + EX.CELL_W / 2;
+      ctx.textAlign = 'center';
+      var nameTop = imgY + imgH + 8;
+      if (ch) {
+        var n1 = ch.name_cn || ch.name || '';
+        var n2 = (ch.name_cn && ch.name && ch.name_cn !== ch.name) ? ch.name : '';
+        ctx.fillStyle = '#23262e';
+        ctx.font = '600 15px ' + FONT;
+        ctx.fillText(fitText(ctx, n1, imgW), cx, nameTop + 18);
+        if (n2) {
+          ctx.fillStyle = '#9aa1b1';
+          ctx.font = '12px ' + FONT;
+          ctx.fillText(fitText(ctx, n2, imgW), cx, nameTop + 36);
+        }
+      } else {
+        ctx.fillStyle = '#c3c8d6';
+        ctx.font = '13px ' + FONT;
+        ctx.fillText('（空）', cx, nameTop + 18);
+      }
+
+      // 右下角序号，方便对着看
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#dfe2ec';
+      ctx.font = '10px ' + FONT;
+      ctx.fillText(String(geo[geo.length - 1].idx), x + EX.CELL_W - 7, y + EX.CELL_H - 6);
+    }
+  }
+
+  // ---- 再异步补上立绘 ----
+  // 为什么要分批：部分角色图非常大（实测有 800x2767 的），
+  // 一次性全部加载会占掉大量内存，分批加载并即时释放更稳。
+  var tainted = false;
+  if (withImages) {
+    var jobs = geo.filter(function (g) { return g.cell.char; });
+    var BATCH = 4;
+    for (var i = 0; i < jobs.length; i += BATCH) {
+      var slice = jobs.slice(i, i + BATCH);
+      await Promise.all(slice.map(function (g) {
+        var ch = g.cell.char;
+        var url = ch.localUrl || pickImg(ch.images, state.imgSize);
+        if (!url) return Promise.resolve();
+        return getCleanImage(url).then(function (img) {
+          if (!img) { tainted = true; return; }   // 拿不到干净图 → 用占位块，并标记
+          ctx.save();
+          rrect(ctx, g.img.x, g.img.y, g.img.w, g.img.h, EX.IMG_R);
+          ctx.clip();
+          drawCover(ctx, img, g.img.x, g.img.y, g.img.w, g.img.h, EX.BIAS);
+          ctx.restore();
+          // 画完即释放引用，避免大图常驻内存
+          imgCache[url] = { clean: true, status: 'ok' };
+        });
+      }));
+    }
+  }
+
+  // ---- 底部：数据来源 ----
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#9aa1b1';
+  ctx.font = '12px ' + FONT;
+  ctx.fillText('角色立绘与资料来自 Bangumi（bgm.tv）', EX.OUTER, H - 24);
+  ctx.textAlign = 'right';
+  var d = new Date();
+  ctx.fillText('导出时间 ' + d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(), W - EX.OUTER, H - 24);
+
+  return { canvas: cv, tainted: tainted };
+}
+
+async function doExport(withImages) {
+  var btn = withImages ? $('exportBtn') : $('exportNoImgBtn');
+
+  // ===== 硬性要求：没填「制作人」就不给导出 =====
+  var who = $('producerInput').value.trim();
+  if (!who) {
+    state.producer = '';
+    $('producerNote').style.display = 'block';
+    $('producerInput').classList.add('field-err');
+    $('producerInput').focus();
+    setStatus('exportStatus', '导出已取消：请先填写「制作人」。', 'err');
+    toast('请先填写「制作人」再导出', true);
+    return;
+  }
+  $('producerNote').style.display = 'none';
+  $('producerInput').classList.remove('field-err');
+  state.producer = who;
+
+  btn.disabled = true;
+  var oldTxt = btn.textContent;
+  btn.textContent = '正在合成…';
+  setStatus('exportStatus', '<span class="spin"></span> 正在合成图片…');
+
+  try {
+    var res = await buildCanvas(withImages);
+    var blob = await canvasToBlob(res.canvas);
+    download(blob, exportFilename('png'));
+    var msg = '导出成功：' + res.canvas.width + '×' + res.canvas.height + ' PNG，制作人已写入图上。';
+    if (withImages && res.tainted) {
+      msg += '注意：有部分立绘因为所在域名没有跨域许可而无法画入，图中用占位色块代替了。'
+           + '可以点「该格用本地图片」换成本地图片后重新导出，导出结果一定会包含它。';
+    }
+    setStatus('exportStatus', msg, 'ok');
+    toast('已导出 PNG');
+  } catch (e) {
+    // canvas 被跨域图片污染时 toBlob 会抛 SecurityError —— 这里给出可执行的替代方案
+    var isTaint = e && (e.name === 'SecurityError' || /tainted|insecure|SecurityError/i.test(String(e.message || '')));
+    setStatus('exportStatus',
+      '导出失败：' + esc(e.message || e) +
+      (isTaint
+        ? '<br>原因是画布被跨域图片污染了。请改用上面的「导出（不含立绘）」，' +
+          '或者对出问题的格子点「该格用本地图片」换成本地文件后再导出。'
+        : '<br>可以试试减少格子数量、降低清晰度，或者用「导出（不含立绘）」。'), 'err');
+    toast('导出失败，请看下方提示', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldTxt;
+  }
+}
+
+$('exportBtn').addEventListener('click', function () { doExport(true); });
+$('exportNoImgBtn').addEventListener('click', function () { doExport(false); });
+
+/* ------------------------------- 个字段联动 ------------------------------- */
+$('titleInput').addEventListener('input', function () {
+  state.title = $('titleInput').value;
+  saveState();
+});
+$('producerInput').addEventListener('input', function () {
+  state.producer = $('producerInput').value.trim();
+  if (state.producer) {
+    $('producerNote').style.display = 'none';
+    $('producerInput').classList.remove('field-err');
+  }
+  saveState();
+});
+$('producerInput').addEventListener('blur', function () {
+  // 失焦时再校验一次，给出明确提示
+  if (!this.value.trim()) {
+    $('producerNote').style.display = 'block';
+    $('producerInput').classList.add('field-err');
+  }
+});
+$('imgSize').addEventListener('change', function () {
+  state.imgSize = this.value === 'm' ? 'm' : 'l';
+  // 只影响导出取图：界面缩略图固定用 medium，所以不用重绘网格，
+  // 只要把导出用的图片缓存清掉，下次导出就会按新尺寸重新取图。
+  imgCache = {};
+  saveState();
+  toast(state.imgSize === 'l' ? '导出将使用 large 立绘（更清晰）' : '导出将使用 medium 立绘（体积更小）');
+});
+
+/* -------------------------------- 启动 -------------------------------- */
+
+(function init() {
+  var restored = loadState();
+  if (!restored) {
+    state.cells = buildDefaultGrid();
+  } else if (state.cells.some(function (row) { return row.some(function (c) { return c.char && c.char.localUrl; }); })) {
+    toast('上一次的本地图片不会被保存，请重新指定', true);
+  }
+  $('titleInput').value = state.title;
+  $('producerInput').value = state.producer;
+  $('imgSize').value = state.imgSize;
+  if (!state.producer) $('producerNote').style.display = 'block';
+  render();
+  renderSubjects();
+  renderChars();
+})();
+</script>
+</body>
+</html>
