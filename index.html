@@ -420,10 +420,12 @@ var BGM_IMG_HOST_CORS = 'api.bgm.tv';
 
 var DEFAULT_LABELS = ['最喜欢', '最遗憾', '最神秘', '最鬼畜', '最可爱', '最智慧', '最不正经', '最神人', '最败犬'];
 
-// 界面缩略图固定用 medium：实测 medium 约 220x264，而屏幕上的格子宽约 225px，
-// 正好是 1:1，既清晰又省流量、省内存（large 里出现过 800x2767 的大图）。
-// 导出时才按用户选择的清晰度重新取图，两者互不影响。
-var DISPLAY_SIZE = 'm';
+// 格子里的立绘用 large（v0.2.14 调整，用户反馈「立绘太模糊」）：
+// 原先用 medium（约 220x264）是为了省流量，但
+// ① medium 与导出用的 large 不是同一张图，屏幕上和导出结果不一致，容易让人以为「导出变糊了」；
+// ② 实测同一个角色的 large 常见 800x2767、medium 只有 400x1384，缩到格子尺寸后 large 明显更锐；
+// ③ 单个角色 large 约 100~200KB，40 格也就几 MB，本地工具完全可以接受。
+var DISPLAY_SIZE = 'l';
 
 var MIN_COLS = 3, MAX_COLS = 4;
 var MIN_ROWS = 3, MAX_ROWS = 10;
@@ -1364,6 +1366,13 @@ async function buildCanvas(withImages) {
   var ctx = cv.getContext('2d');
   ctx.scale(S, S);
   ctx.textBaseline = 'alphabetic';
+  /*
+   * 图像重采样质量（v0.2.14）。canvas 默认是 'low'（近似最近邻的速度优先实现），
+   * 立绘要缩到格子尺寸、少数小图还要放大，默认质量下边缘会发虚 —— 这正是用户说的「太模糊」。
+   * 设成 'high' 后浏览器用更好的插值核，同分辨率下观感明显更锐，代价只是导出多几十毫秒。
+   */
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
   var FONT = '"Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", "Noto Sans CJK SC", sans-serif';
 
